@@ -1,0 +1,14 @@
+[project]
+name = "sentry_enabler"
+authors = [{ name = "Elbrit", email = "support@elbrit.org" }]
+description = "Provides sentry-sdk so Frappe's native Sentry integration works"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    "sentry-sdk>=2.0",
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
