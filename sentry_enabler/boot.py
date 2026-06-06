@@ -32,6 +32,7 @@ def init_sentry():
 
     _patch_log_error()
     _set_request_scope()
+    _start_transaction()
 
 
 def _patch_log_error():
@@ -72,9 +73,17 @@ def _set_request_scope():
     except Exception:
         user = None
 
-    if user:
+    if user and user != "Guest":
+        email = None
+        full_name = None
+        try:
+            email, full_name = frappe.get_cached_value("User", user, ["email", "full_name"])
+        except Exception:
+            pass
+        if not email and "@" in str(user):
+            email = user
         sentry_sdk.set_user(
-            {"id": user, "username": user, "email": user if "@" in str(user) else None}
+            {"id": user, "username": full_name or user, "email": email}
         )
 
     site = getattr(frappe.local, "site", None)
@@ -86,5 +95,41 @@ def _set_request_scope():
         try:
             sentry_sdk.set_context("request", {"url": request.url, "method": request.method})
             sentry_sdk.get_current_scope().set_transaction_name(request.path)
+        except Exception:
+            pass
+
+
+def _start_transaction():
+    import sentry_sdk
+
+    if float(frappe.conf.get("sentry_traces_sample_rate") or 0.0) <= 0:
+        return
+
+    request = getattr(frappe.local, "request", None)
+    if request is None:
+        return
+
+    if getattr(frappe.local, "_sentry_transaction", None) is not None:
+        return
+
+    try:
+        transaction = sentry_sdk.start_transaction(name=request.path, op="http.server")
+        transaction.__enter__()
+        frappe.local._sentry_transaction = transaction
+    except Exception:
+        pass
+
+
+def finish_transaction(*args, **kwargs):
+    transaction = getattr(frappe.local, "_sentry_transaction", None)
+    if transaction is None:
+        return
+    try:
+        transaction.__exit__(None, None, None)
+    except Exception:
+        pass
+    finally:
+        try:
+            frappe.local._sentry_transaction = None
         except Exception:
             pass
