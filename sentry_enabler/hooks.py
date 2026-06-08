@@ -8,3 +8,6 @@ app_license = "mit"
 before_request = ["sentry_enabler.boot.init_sentry"]
 after_request = ["sentry_enabler.boot.finish_transaction"]
 before_job = ["sentry_enabler.boot.init_sentry"]
+
+app_include_js = ["/assets/sentry_enabler/js/sentry_frontend.js"]
+boot_session = "sentry_enabler.boot.add_frontend_dsn_to_boot"

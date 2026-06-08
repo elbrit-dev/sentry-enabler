@@ -133,3 +133,15 @@ def finish_transaction(*args, **kwargs):
             frappe.local._sentry_transaction = None
         except Exception:
             pass
+
+
+def add_frontend_dsn_to_boot(bootinfo):
+    dsn = frappe.conf.get("sentry_frontend_dsn")
+    if not dsn:
+        return
+    bootinfo.sentry_frontend_dsn = dsn
+    bootinfo.sentry_frontend_environment = (
+        frappe.conf.get("sentry_environment")
+        or getattr(frappe.local, "site", None)
+        or "frappe"
+    )
