@@ -34,24 +34,61 @@ def sentry_webhook():
     provided = frappe.form_dict.get("token") or frappe.get_request_header("X-Sentry-Token")
     if expected and provided != expected:
         raise frappe.PermissionError("Invalid Sentry webhook token")
+
     try:
-        data = json.loads(frappe.request.data or b"{}")
+        payload = json.loads(frappe.request.data or b"{}")
     except Exception:
-        data = dict(frappe.form_dict)
-    event = data.get("event") or {}
-    title = data.get("message") or event.get("title") or "Sentry error"
-    url = data.get("url") or event.get("web_url") or ""
-    level = str(data.get("level") or event.get("level") or "").upper()
-    project = data.get("project_name") or data.get("project") or ""
-    user = event.get("user") or {}
-    who = user.get("email") or user.get("username") or user.get("id") or "unknown"
-    text = (
-        "🔴 <b>New Sentry error</b><br>"
-        f"<b>{frappe.utils.escape_html(str(title))}</b><br>"
-        f"👤 User: {frappe.utils.escape_html(str(who))}<br>"
-        f"📦 {frappe.utils.escape_html(str(project))} | Level: {frappe.utils.escape_html(level)}<br>"
-        f'🔗 <a href="{url}">Open in Sentry</a>'
+        payload = dict(frappe.form_dict)
+
+    # Sentry nests the event under data.event (alert action) or data.issue (issue webhook)
+    d = payload.get("data") or {}
+    event = d.get("event") or payload.get("event") or {}
+    issue = d.get("issue") or payload.get("issue") or {}
+    metadata = event.get("metadata") or issue.get("metadata") or {}
+
+    # Build a tag lookup (Sentry sends tags as [[key, value], ...])
+    tagmap = {}
+    for t in (event.get("tags") or issue.get("tags") or []):
+        if isinstance(t, (list, tuple)) and len(t) == 2:
+            tagmap[t[0]] = t[1]
+        elif isinstance(t, dict):
+            tagmap[t.get("key")] = t.get("value")
+
+    title = (
+        event.get("title")
+        or issue.get("title")
+        or payload.get("message")
+        or ": ".join(x for x in [metadata.get("type"), metadata.get("value")] if x)
+        or "Sentry error"
     )
+    level = str(
+        event.get("level") or issue.get("level") or payload.get("level")
+        or tagmap.get("level") or "error"
+    ).upper()
+    url = (
+        event.get("web_url") or issue.get("permalink") or issue.get("url")
+        or payload.get("url") or ""
+    )
+    culprit = event.get("culprit") or issue.get("culprit") or ""
+
+    u = event.get("user") or {}
+    if isinstance(u, dict):
+        who = u.get("email") or u.get("username") or u.get("id") or u.get("ip_address")
+    else:
+        who = str(u or "")
+    who = who or tagmap.get("user") or tagmap.get("user.email") or "unknown"
+
+    esc = frappe.utils.escape_html
+    parts = [
+        "🔴 <b>New Sentry error</b>",
+        f"<b>{esc(str(title))}</b>",
+        f"👤 User: {esc(str(who))}",
+        f"🏷️ Level: {esc(level)}" + (f" • {esc(str(culprit))}" if culprit else ""),
+    ]
+    if url:
+        parts.append(f'🔗 <a href="{url}">{esc(str(url))}</a>')
+    text = "<br>".join(parts)
+
     _send_to_raven(text)
     return {"ok": True}
 
