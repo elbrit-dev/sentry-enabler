@@ -60,7 +60,6 @@ def sentry_webhook():
         elif isinstance(t, dict):
             tagmap[t.get("key")] = t.get("value")
 
-    # The actual error description (works for both backend Python and frontend JS errors)
     exc_values = (event.get("exception") or {}).get("values") or []
     exc = exc_values[-1] if exc_values else {}
     exc_type = exc.get("type") or metadata.get("type") or ""
@@ -72,6 +71,17 @@ def sentry_webhook():
             or payload.get("message") or "Sentry error"
         )
 
+    # Find the frame where the error happened (last in-app frame with code)
+    frames = (exc.get("stacktrace") or {}).get("frames") or []
+    in_app = [f for f in frames if f.get("in_app")] or frames
+    code_frame = None
+    for f in reversed(in_app):
+        if f.get("context_line") is not None or f.get("pre_context") or f.get("post_context"):
+            code_frame = f
+            break
+    if not code_frame and in_app:
+        code_frame = in_app[-1]
+
     level = str(
         event.get("level") or issue.get("level") or payload.get("level")
         or tagmap.get("level") or "error"
@@ -80,7 +90,6 @@ def sentry_webhook():
         event.get("web_url") or issue.get("permalink") or issue.get("url")
         or payload.get("url") or ""
     )
-    culprit = event.get("culprit") or issue.get("culprit") or metadata.get("filename") or ""
 
     u = event.get("user") or {}
     if isinstance(u, dict):
@@ -92,14 +101,39 @@ def sentry_webhook():
     esc = frappe.utils.escape_html
     parts = [
         "🔴 <b>New Sentry error</b>",
-        f"<b>{esc(str(description))}</b>",
+        f"👤 <b>User:</b> {esc(str(who))}",
+        f"🏷️ <b>Level:</b> {esc(level)}",
+        f"📝 <b>Description:</b> {esc(str(description))}",
     ]
-    if culprit:
-        parts.append(f"📍 {esc(str(culprit))}")
-    parts.append(f"👤 User: {esc(str(who))}")
-    parts.append(f"🏷️ Level: {esc(level)}")
+
+    if code_frame:
+        loc = code_frame.get("filename") or code_frame.get("module") or "?"
+        ln = code_frame.get("lineno")
+        fn = code_frame.get("function") or "?"
+        header = f"{loc}:{ln} in {fn}" if ln else f"{loc} in {fn}"
+        pre = code_frame.get("pre_context") or []
+        post = code_frame.get("post_context") or []
+        ctx = code_frame.get("context_line")
+        code_lines = []
+        n = (ln or 0) - len(pre)
+        for l in pre:
+            code_lines.append(f"{n}    {l}")
+            n += 1
+        if ctx is not None:
+            code_lines.append(f"{n} →  {ctx}")
+            n += 1
+        for l in post:
+            code_lines.append(f"{n}    {l}")
+            n += 1
+        code_html = "<br>".join(esc(l) for l in code_lines)
+        if len(code_html) > 2500:
+            code_html = code_html[:2500] + " …"
+        parts.append(f"<b>📄 {esc(header)}</b>")
+        parts.append(f"<pre>{code_html}</pre>")
+
     if url:
         parts.append(f'🔗 <a href="{url}">{esc(str(url))}</a>')
+
     text = "<br>".join(parts)
 
     _send_to_raven(text)
