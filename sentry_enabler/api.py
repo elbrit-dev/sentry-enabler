@@ -48,13 +48,11 @@ def sentry_webhook():
     except Exception:
         payload = dict(frappe.form_dict)
 
-    # Sentry nests the event under data.event (alert action) or data.issue (issue webhook)
     d = payload.get("data") or {}
     event = d.get("event") or payload.get("event") or {}
     issue = d.get("issue") or payload.get("issue") or {}
     metadata = event.get("metadata") or issue.get("metadata") or {}
 
-    # Build a tag lookup (Sentry sends tags as [[key, value], ...])
     tagmap = {}
     for t in (event.get("tags") or issue.get("tags") or []):
         if isinstance(t, (list, tuple)) and len(t) == 2:
@@ -62,13 +60,18 @@ def sentry_webhook():
         elif isinstance(t, dict):
             tagmap[t.get("key")] = t.get("value")
 
-    title = (
-        event.get("title")
-        or issue.get("title")
-        or payload.get("message")
-        or ": ".join(x for x in [metadata.get("type"), metadata.get("value")] if x)
-        or "Sentry error"
-    )
+    # The actual error description (works for both backend Python and frontend JS errors)
+    exc_values = (event.get("exception") or {}).get("values") or []
+    exc = exc_values[-1] if exc_values else {}
+    exc_type = exc.get("type") or metadata.get("type") or ""
+    exc_value = exc.get("value") or metadata.get("value") or ""
+    description = ": ".join(p for p in [exc_type, exc_value] if p)
+    if not description:
+        description = (
+            event.get("title") or issue.get("title")
+            or payload.get("message") or "Sentry error"
+        )
+
     level = str(
         event.get("level") or issue.get("level") or payload.get("level")
         or tagmap.get("level") or "error"
@@ -77,7 +80,7 @@ def sentry_webhook():
         event.get("web_url") or issue.get("permalink") or issue.get("url")
         or payload.get("url") or ""
     )
-    culprit = event.get("culprit") or issue.get("culprit") or ""
+    culprit = event.get("culprit") or issue.get("culprit") or metadata.get("filename") or ""
 
     u = event.get("user") or {}
     if isinstance(u, dict):
@@ -89,10 +92,12 @@ def sentry_webhook():
     esc = frappe.utils.escape_html
     parts = [
         "🔴 <b>New Sentry error</b>",
-        f"<b>{esc(str(title))}</b>",
-        f"👤 User: {esc(str(who))}",
-        f"🏷️ Level: {esc(level)}" + (f" • {esc(str(culprit))}" if culprit else ""),
+        f"<b>{esc(str(description))}</b>",
     ]
+    if culprit:
+        parts.append(f"📍 {esc(str(culprit))}")
+    parts.append(f"👤 User: {esc(str(who))}")
+    parts.append(f"🏷️ Level: {esc(level)}")
     if url:
         parts.append(f'🔗 <a href="{url}">{esc(str(url))}</a>')
     text = "<br>".join(parts)
