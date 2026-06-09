@@ -20,12 +20,16 @@ def send_error():
     from sentry_enabler.boot import init_sentry
     init_sentry()
     import sentry_sdk
+    import time
+    marker = time.strftime("%Y%m%d-%H%M%S")
     try:
-        raise ValueError("Real test error from sentry_enabler (with stack trace)")
+        raise ValueError(f"Sentry Enabler test error @ {marker}")
     except Exception as exc:
-        event_id = sentry_sdk.capture_exception(exc)
+        with sentry_sdk.new_scope() as scope:
+            scope.fingerprint = ["sentry-enabler-test", marker]
+            event_id = sentry_sdk.capture_exception(exc)
         sentry_sdk.flush()
-    return {"captured": True, "event_id": event_id, "user": frappe.session.user}
+    return {"captured": True, "event_id": event_id, "marker": marker, "user": frappe.session.user}
 
 
 @frappe.whitelist(allow_guest=True)
