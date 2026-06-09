@@ -31,7 +31,11 @@ def send_error():
 @frappe.whitelist(allow_guest=True)
 def sentry_webhook():
     expected = frappe.conf.get("sentry_webhook_token")
-    provided = frappe.form_dict.get("token") or frappe.get_request_header("X-Sentry-Token")
+    provided = (
+        frappe.request.args.get("token")
+        or frappe.form_dict.get("token")
+        or frappe.get_request_header("X-Sentry-Token")
+    )
     if expected and provided != expected:
         raise frappe.PermissionError("Invalid Sentry webhook token")
 
