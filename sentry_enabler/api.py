@@ -71,16 +71,22 @@ def sentry_webhook():
             or payload.get("message") or "Sentry error"
         )
 
-    # Find the frame where the error happened (last in-app frame with code)
     frames = (exc.get("stacktrace") or {}).get("frames") or []
     in_app = [f for f in frames if f.get("in_app")] or frames
+
+    def _loc(f):
+        loc = f.get("filename") or f.get("module") or "?"
+        ln = f.get("lineno")
+        fn = f.get("function") or "?"
+        return f"{loc}:{ln} in {fn}" if ln else f"{loc} in {fn}"
+
+    frame_locs = [_loc(f) for f in reversed(in_app)][:6]
+
     code_frame = None
     for f in reversed(in_app):
         if f.get("context_line") is not None or f.get("pre_context") or f.get("post_context"):
             code_frame = f
             break
-    if not code_frame and in_app:
-        code_frame = in_app[-1]
 
     level = str(
         event.get("level") or issue.get("level") or payload.get("level")
@@ -106,11 +112,12 @@ def sentry_webhook():
         f"📝 <b>Description:</b> {esc(str(description))}",
     ]
 
+    if frame_locs:
+        parts.append("<b>🧵 Stack (most recent first):</b>")
+        parts.append("<br>".join("&nbsp;&nbsp;" + esc(l) for l in frame_locs))
+
     if code_frame:
-        loc = code_frame.get("filename") or code_frame.get("module") or "?"
         ln = code_frame.get("lineno")
-        fn = code_frame.get("function") or "?"
-        header = f"{loc}:{ln} in {fn}" if ln else f"{loc} in {fn}"
         pre = code_frame.get("pre_context") or []
         post = code_frame.get("post_context") or []
         ctx = code_frame.get("context_line")
@@ -128,7 +135,7 @@ def sentry_webhook():
         code_html = "<br>".join(esc(l) for l in code_lines)
         if len(code_html) > 2500:
             code_html = code_html[:2500] + " …"
-        parts.append(f"<b>📄 {esc(header)}</b>")
+        parts.append(f"<b>📄 {esc(_loc(code_frame))}</b>")
         parts.append(f"<pre>{code_html}</pre>")
 
     if url:
