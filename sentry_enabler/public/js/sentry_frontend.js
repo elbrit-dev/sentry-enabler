@@ -24,6 +24,15 @@
                 "Non-Error promise rejection captured",
             ],
             denyUrls: [/extensions\//i, /^chrome:\/\//i, /^moz-extension:\/\//i, /^safari-extension:\/\//i],
+            integrations: [
+                window.Sentry.replayIntegration({
+                    maskAllText: true,
+                    maskAllInputs: true,
+                    blockAllMedia: true,
+                }),
+            ],
+            replaysSessionSampleRate: 0.1,
+            replaysOnErrorSampleRate: 1.0,
         });
         try {
             var user = frappe.session && frappe.session.user;
