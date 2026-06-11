@@ -235,11 +235,18 @@ def send_profile_test():
     import time
     from sentry_enabler.boot import init_sentry
     init_sentry()
-    marker = frappe.utils.now()
+    client = sentry_sdk.get_client()
+    opts = getattr(client, "options", {}) or {}
     sentry_sdk.profiler.start_profiler()
     for _ in range(10):
-        time.sleep(0.1)   # slow path
-        time.sleep(0.05)  # fast path
+        time.sleep(0.1)
+        time.sleep(0.05)
     sentry_sdk.profiler.stop_profiler()
     sentry_sdk.flush()
-    return {"ok": True, "marker": marker}
+    return {
+        "ok": True,
+        "conf_rate": frappe.conf.get("sentry_profile_session_sample_rate"),
+        "client_active": bool(getattr(client, "dsn", None)),
+        "opt_profile_session_sample_rate": opts.get("profile_session_sample_rate"),
+        "opt_traces_sample_rate": opts.get("traces_sample_rate"),
+    }
