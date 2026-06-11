@@ -26,6 +26,8 @@ def init_sentry():
             traces_sample_rate=float(frappe.conf.get("sentry_traces_sample_rate") or 0.0),
             send_default_pii=bool(frappe.conf.get("sentry_send_default_pii") or False),
             enable_logs=True,
+            profile_session_sample_rate=float(frappe.conf.get("sentry_profile_session_sample_rate") or 0),
+            profile_lifecycle="manual",
             integrations=[
                 LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
             ],

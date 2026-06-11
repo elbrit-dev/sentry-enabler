@@ -228,3 +228,18 @@ def send_metric_test():
                                     unit="millisecond", attributes=attrs)
     sentry_sdk.flush()
     return {"ok": True, "marker": marker}
+
+
+@frappe.whitelist()
+def send_profile_test():
+    import time
+    from sentry_enabler.boot import init_sentry
+    init_sentry()
+    marker = frappe.utils.now()
+    sentry_sdk.profiler.start_profiler()
+    for _ in range(10):
+        time.sleep(0.1)   # slow path
+        time.sleep(0.05)  # fast path
+    sentry_sdk.profiler.stop_profiler()
+    sentry_sdk.flush()
+    return {"ok": True, "marker": marker}
