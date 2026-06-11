@@ -1,6 +1,7 @@
 import json
 
 import frappe
+import sentry_sdk
 
 
 @frappe.whitelist()
@@ -202,3 +203,14 @@ def _fmt_time(ts):
         return str(ts).replace("T", " ")[:16] + " UTC"
     except Exception:
         return str(ts)
+
+
+@frappe.whitelist()
+def send_log_test():
+    from sentry_sdk import logger as sentry_logger
+    marker = frappe.utils.now()
+    sentry_logger.info("sentry_enabler log test (info) @ {marker}", marker=marker)
+    sentry_logger.warning("sentry_enabler log test (warning) @ {marker}", marker=marker)
+    sentry_logger.error("sentry_enabler log test (error-level LOG, not an exception) @ {marker}", marker=marker)
+    sentry_sdk.flush()
+    return {"ok": True, "marker": marker}
