@@ -214,3 +214,17 @@ def send_log_test():
     sentry_logger.error("sentry_enabler log test (error-level LOG, not an exception) @ {marker}", marker=marker)
     sentry_sdk.flush()
     return {"ok": True, "marker": marker}
+
+
+@frappe.whitelist()
+def send_metric_test():
+    from sentry_enabler.boot import init_sentry
+    init_sentry()
+    marker = frappe.utils.now()
+    attrs = {"marker": marker, "site": frappe.local.site}
+    sentry_sdk.metrics.count("sentry_enabler.test_count", 1, attributes=attrs)
+    sentry_sdk.metrics.gauge("sentry_enabler.test_gauge", 42, attributes=attrs)
+    sentry_sdk.metrics.distribution("sentry_enabler.test_distribution", 187,
+                                    unit="millisecond", attributes=attrs)
+    sentry_sdk.flush()
+    return {"ok": True, "marker": marker}
