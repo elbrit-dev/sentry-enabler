@@ -49,100 +49,12 @@ def sentry_webhook():
         payload = dict(frappe.form_dict)
 
     d = payload.get("data") or {}
-    event = d.get("event") or payload.get("event") or {}
-    issue = d.get("issue") or payload.get("issue") or {}
-    metadata = event.get("metadata") or issue.get("metadata") or {}
-
-    tagmap = {}
-    for t in (event.get("tags") or issue.get("tags") or []):
-        if isinstance(t, (list, tuple)) and len(t) == 2:
-            tagmap[t[0]] = t[1]
-        elif isinstance(t, dict):
-            tagmap[t.get("key")] = t.get("value")
-
-    exc_values = (event.get("exception") or {}).get("values") or []
-    exc = exc_values[-1] if exc_values else {}
-    exc_type = exc.get("type") or metadata.get("type") or ""
-    exc_value = exc.get("value") or metadata.get("value") or ""
-    description = ": ".join(p for p in [exc_type, exc_value] if p)
-    if not description:
-        description = (
-            event.get("title") or issue.get("title")
-            or payload.get("message") or "Sentry error"
-        )
-
-    frames = (exc.get("stacktrace") or {}).get("frames") or []
-    in_app = [f for f in frames if f.get("in_app")] or frames
-
-    def _loc(f):
-        loc = f.get("filename") or f.get("module") or "?"
-        ln = f.get("lineno")
-        fn = f.get("function") or "?"
-        return f"{loc}:{ln} in {fn}" if ln else f"{loc} in {fn}"
-
-    frame_locs = [_loc(f) for f in reversed(in_app)][:6]
-
-    code_frame = None
-    for f in reversed(in_app):
-        if f.get("context_line") is not None or f.get("pre_context") or f.get("post_context"):
-            code_frame = f
-            break
-
-    level = str(
-        event.get("level") or issue.get("level") or payload.get("level")
-        or tagmap.get("level") or "error"
-    ).upper()
-    url = (
-        event.get("web_url") or issue.get("permalink") or issue.get("url")
-        or payload.get("url") or ""
+    event = (
+        d.get("event") or payload.get("event")
+        or d.get("issue") or payload.get("issue") or {}
     )
 
-    u = event.get("user") or {}
-    if isinstance(u, dict):
-        who = u.get("email") or u.get("username") or u.get("id") or u.get("ip_address")
-    else:
-        who = str(u or "")
-    who = who or tagmap.get("user") or tagmap.get("user.email") or "unknown"
-
-    esc = frappe.utils.escape_html
-    parts = [
-        "🔴 <b>New Sentry error</b>",
-        f"👤 <b>User:</b> {esc(str(who))}",
-        f"🏷️ <b>Level:</b> {esc(level)}",
-        f"📝 <b>Description:</b> {esc(str(description))}",
-    ]
-
-    if frame_locs:
-        parts.append("<b>🧵 Stack (most recent first):</b>")
-        parts.append("<br>".join("&nbsp;&nbsp;" + esc(l) for l in frame_locs))
-
-    if code_frame:
-        ln = code_frame.get("lineno")
-        pre = code_frame.get("pre_context") or []
-        post = code_frame.get("post_context") or []
-        ctx = code_frame.get("context_line")
-        code_lines = []
-        n = (ln or 0) - len(pre)
-        for l in pre:
-            code_lines.append(f"{n}    {l}")
-            n += 1
-        if ctx is not None:
-            code_lines.append(f"{n} →  {ctx}")
-            n += 1
-        for l in post:
-            code_lines.append(f"{n}    {l}")
-            n += 1
-        code_html = "<br>".join(esc(l) for l in code_lines)
-        if len(code_html) > 2500:
-            code_html = code_html[:2500] + " …"
-        parts.append(f"<b>📄 {esc(_loc(code_frame))}</b>")
-        parts.append(f"<pre>{code_html}</pre>")
-
-    if url:
-        parts.append(f'🔗 <a href="{url}">{esc(str(url))}</a>')
-
-    text = "<br>".join(parts)
-
+    text = _build_sentry_message(payload, event)
     _send_to_raven(text)
     return {"ok": True}
 
@@ -161,3 +73,132 @@ def _send_to_raven(text):
         frappe.db.commit()
     except Exception:
         pass
+
+
+def _normalize_tags(tags):
+    pairs = []
+    for t in (tags or []):
+        if isinstance(t, (list, tuple)) and len(t) == 2:
+            pairs.append((t[0], t[1]))
+        elif isinstance(t, dict):
+            pairs.append((t.get("key"), t.get("value")))
+    return pairs
+
+
+def _stringify_query(qs):
+    if not qs:
+        return ""
+    if isinstance(qs, str):
+        return qs
+    if isinstance(qs, dict):
+        return "&".join(f"{k}={v}" for k, v in qs.items())
+    if isinstance(qs, (list, tuple)):
+        out = []
+        for item in qs:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                out.append(f"{item[0]}={item[1]}")
+            else:
+                out.append(str(item))
+        return "&".join(out)
+    return str(qs)
+
+
+def _build_sentry_message(data, event):
+    esc = frappe.utils.escape_html
+
+    exc_values = (event.get("exception") or {}).get("values") or []
+    root = exc_values[-1] if exc_values else {}
+    exc_type = root.get("type") or ""
+    exc_value = root.get("value") or ""
+    title = (event.get("title") or data.get("message")
+             or f"{exc_type}: {exc_value}".strip(": ") or "Sentry error")
+
+    project = data.get("project_name") or event.get("project") or data.get("project") or ""
+    environment = event.get("environment") or ""
+    level = str(event.get("level") or data.get("level") or "error").upper()
+    ts = _fmt_time(event.get("datetime") or event.get("timestamp"))
+    event_id = event.get("event_id") or ""
+    short_id = (event_id[:8] + "…" + event_id[-4:]) if len(event_id) > 14 else event_id
+    issue_url = data.get("url") or event.get("web_url") or ""
+
+    frames = ((root.get("stacktrace") or {}).get("frames")) or []
+    in_app = [f for f in frames if f.get("in_app")] or frames
+    lines = []
+    for f in in_app[-6:]:
+        fn = f.get("function") or "?"
+        raw = f.get("filename") or f.get("abs_path") or "?"
+        base = str(raw).rsplit("/", 1)[-1]
+        ln = f.get("lineno")
+        lines.append(f"at {fn} ({base}:{ln})" if ln else f"at {fn} ({base})")
+    trace_block = "\n".join(lines)
+
+    req = event.get("request") or {}
+    req_url = req.get("url") or ""
+    req_query = _stringify_query(req.get("query_string"))
+    if len(req_query) > 220:
+        req_query = req_query[:220] + "…"
+
+    user = event.get("user") or {}
+    who = user.get("email") or user.get("username") or user.get("id") or ""
+    u_ip = user.get("ip_address") or ""
+
+    tag_pairs = _normalize_tags(event.get("tags"))
+    skip = {"level", "environment"}
+    chips = " ".join(
+        f"<code>{esc(str(k))}:{esc(str(v))}</code>"
+        for k, v in tag_pairs[:10] if str(k) not in skip
+    )
+
+    sev = {"FATAL": "💀", "ERROR": "🔴", "WARNING": "🟠",
+           "INFO": "🔵", "DEBUG": "⚪"}.get(level, "🔴")
+
+    p = []
+    banner = f"{sev} <b>{esc(level)}</b>"
+    if environment:
+        banner += f" · {esc(str(environment))}"
+    p.append(banner)
+    p.append(f"<b>{esc(str(title))}</b>")
+
+    line2 = []
+    if project:  line2.append("📦 " + esc(str(project)))
+    if ts:       line2.append("🕒 " + esc(ts))
+    if short_id: line2.append("🆔 " + esc(short_id))
+    if line2:
+        p.append("<hr>" + " &nbsp; ".join(line2))
+
+    if trace_block:
+        p.append("<b>⚠️ Exception</b><pre>" + esc(trace_block) + "</pre>")
+
+    if req_url or req_query:
+        r = "<b>🌐 Request</b><br>"
+        if req_url:
+            r += f'<a href="{esc(str(req_url))}">{esc(str(req_url))}</a>'
+        if req_query:
+            r += ("<br>" if req_url else "") + "<code>" + esc(str(req_query)) + "</code>"
+        p.append(r)
+
+    if who or u_ip:
+        u = "<b>👤 User</b><br>" + esc(str(who))
+        if u_ip:
+            u += " &nbsp;·&nbsp; IP " + esc(str(u_ip))
+        p.append(u)
+
+    if chips:
+        p.append("<b>🏷️ Tags</b><br>" + chips)
+
+    if issue_url:
+        p.append('<hr>🔗 <a href="' + esc(str(issue_url)) + '"><b>View full issue on Sentry →</b></a>')
+
+    return "<br><br>".join(p)
+
+
+def _fmt_time(ts):
+    if not ts:
+        return ""
+    try:
+        if isinstance(ts, (int, float)):
+            from datetime import datetime, timezone
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%b %d, %Y %H:%M UTC")
+        return str(ts).replace("T", " ")[:16] + " UTC"
+    except Exception:
+        return str(ts)
